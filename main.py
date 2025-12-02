@@ -1,3 +1,20 @@
+# Book Recommendation Platform – Final Code with UML / Requirements Walk-through Comments
+#
+# High-level mapping:
+# - This module implements the “Book Recommendation Platform” system in the UML diagrams.
+# - BookApp (controller + main window) corresponds to the BookApp class in the class diagram
+#   and to the main process in the deployment diagram.
+# - BookData is the data / recommendation model and corresponds to the BookData and
+#   RecommendationEngine classes in the class diagram and to the Book entity in the ER diagram.
+# - The load_state / save_state helpers play the role of the AppState / ReadingListManager
+#   utilities in the class diagram and deployment diagram.
+# - UI widgets and layout implement the use cases from the use-case diagram:
+#   * Search books, Set/Clear filters, Clear results
+#   * Personalize profile / Get recommendations
+#   * Recommend by title / keyword
+#   * Add/Remove/Complete items in To-Read and Completed lists
+#   * Refresh dashboard / View progress chart / Persist lists
+
 import json
 import os
 import re
@@ -13,13 +30,25 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 # ========= YOUR DATASET PATH =========
+# Deployment diagram: books_enriched.csv is the «artifact» stored in the
+# user’s Windows file system. BookData.load_file() reads this file at runtime.
+# ER diagram: each row corresponds to a Book plus related attributes
+# (authors, genres, language_code, rating, difficulty, etc.).
 # IMPORTANT: point to the enriched file you just downloaded
 DATASET_PATH = r"C:\Users\Lakshman\Desktop\Homeworks\Fall 2025\Lakshmi Narayana Manukonda\Professional Seminar Riabov\Final Code\books_enriched.csv"
 # ====================================
 
+# APP_STATE_PATH is the JSON «artifact» shown in the deployment diagram
+# (book_reco_state.json). It represents the AppState / ReadingListManager data.
 APP_STATE_PATH = "book_reco_state.json"
 
 def load_state() -> dict:
+    """
+    Utility corresponding to the AppState.load_state() operation in the class diagram.
+    Sequence diagram (App launch): called as step 2 load_state().
+    It restores the 'to_read' and 'completed' lists that support
+    the Persist lists / Add selected to To-Read / Mark selected as completed use cases.
+    """
     if os.path.exists(APP_STATE_PATH):
         try:
             with open(APP_STATE_PATH, "r", encoding="utf-8") as f:
@@ -29,6 +58,12 @@ def load_state() -> dict:
     return {}
 
 def save_state(state: dict):
+    """
+    Utility corresponding to AppState.save_state() in the class diagram.
+    Sequence diagram (Updating lists): this function is invoked indirectly
+    from persist_lists() whenever the reading lists are updated, satisfying
+    the 'Persist lists' included use case.
+    """
     try:
         with open(APP_STATE_PATH, "w", encoding="utf-8") as f:
             json.dump(state, f, ensure_ascii=False, indent=2)
@@ -36,6 +71,11 @@ def save_state(state: dict):
         print("Failed to save state:", e)
 
 def normalize_list_cell(x):
+    """
+    Helper used by BookData.set_column_map() to normalize genre strings.
+    ER diagram: supports the many-to-many Book–Genre relationship by turning
+    a 'genre' string into a list of genre tokens.
+    """
     if pd.isna(x): return []
     s = str(x).strip()
     if not s: return []
@@ -47,6 +87,13 @@ def normalize_list_cell(x):
 
 # ---------- Scrollable Frame for the left sidebar ----------
 class ScrollableFrame(ttk.Frame):
+    """
+    UI helper component.
+    - Appears as a generic Frame in the class diagram (ttk.Frame / ScrollableFrame).
+    - In the UI mockup it provides the scrollable left panel with Search / Filters,
+      Personalize profile, and recommendation controls that implement the
+      corresponding use cases.
+    """
     def __init__(self, parent, *args, **kwargs):
         super().__init__(parent, *args, **kwargs)
         self.canvas = tk.Canvas(self, highlightthickness=0)
@@ -83,11 +130,28 @@ class ScrollableFrame(ttk.Frame):
             self.canvas.yview_scroll(1, "units")
 
 class BookData:
+    """
+    Model / data-access class.
+    - Class diagram: corresponds to BookData + RecommendationEngine.
+    - ER diagram: wraps the Book, Author, Genre, Language data that come from
+      books_enriched.csv.
+    - Use-case support:
+        * Search books (search(), _apply_filters())
+        * Get recommendations / Recommend by title / Recommend by keyword
+          (recommend_for_profile, recommend_like_title, recommend_by_keyword)
+        * Set filters (get_languages/get_genres are used to populate filter choices).
+    - Sequence diagram:
+        * load_file() is step 8 load_file(DATASET_PATH)
+        * set_column_map() is step 10 set_column_map(mapping)
+        * TF-IDF vectorizer and matrix are steps 11–12 (fit_transform).
+    """
     def __init__(self):
         self.df: Optional[pd.DataFrame] = None
         self.feature_text: Optional[pd.Series] = None
         self.vectorizer: Optional[TfidfVectorizer] = None
         self.tfidf_matrix = None
+        # colmap maps logical attributes from class / ER diagrams to actual CSV columns.
+        # Example: 'title' → title/original_title, 'genres' → genre, etc.
         self.colmap = {
             "title": None,        # required
             "authors": None,      # required
@@ -99,6 +163,12 @@ class BookData:
         }
 
     def load_file(self, path: str):
+        """
+        Deployment / sequence diagram:
+        - Reads the dataset artifact (CSV/XLSX) from disk.
+        - This happens automatically during App launch (_auto_load_dataset) and
+          manually when user uses the File → Load dataset use-case.
+        """
         ext = os.path.splitext(path)[1].lower()
         if ext in [".xlsx", ".xls"]:
             df = pd.read_excel(path)
@@ -110,6 +180,11 @@ class BookData:
         return df
 
     def set_column_map(self, mapping: Dict[str, Optional[str]]):
+        """
+        Maps CSV columns into internal attributes, aligning data with the ER diagram:
+        - title/authors/genres/language_code/description/rating/difficulty.
+        Sequence diagram: called right after load_file() during dataset setup.
+        """
         for k in self.colmap:
             self.colmap[k] = mapping.get(k) or None
 
@@ -164,6 +239,7 @@ class BookData:
 
         # Text features for TF-IDF
         # Keep description in the mix so semantic similarity still works when strict match is empty
+        # Class diagram: this is the RecommendationEngine.tf() / transform() responsibility.
         self.feature_text = (
             df["_title_main"].str.lower().fillna("") + " " +
             df["_authors"].str.lower().str.replace(r"\s+", "_", regex=True).fillna("") + " " +
@@ -176,14 +252,23 @@ class BookData:
             lowercase=True, stop_words="english",
             max_features=50000, ngram_range=(1, 2)
         )
+        # Sequence diagram steps 11–12: fit_transform(feature_text) builds tfidf_matrix.
         self.tfidf_matrix = self.vectorizer.fit_transform(self.feature_text.fillna(""))
 
     def get_languages(self) -> List[str]:
+        """
+        Returns distinct language codes to populate the 'Language' filter combobox.
+        Use-case diagram: supports Set filters for Search books / Get recommendations.
+        """
         if self.df is None: return []
         langs = [x for x in self.df["_language"].dropna().astype(str).unique() if x]
         return sorted(langs) if langs else ["Any"]
 
     def get_genres(self) -> List[str]:
+        """
+        Returns distinct genres to populate the 'Genre' filter combobox.
+        Connects to the Genre entity in the ER diagram.
+        """
         if self.df is None: return []
         all_g = set()
         for xs in self.df["_genres_list"]:
@@ -194,6 +279,11 @@ class BookData:
 
     def _apply_filters(self, df: pd.DataFrame, title_kw: str, author_kw: str,
                        language: str, genre: str, difficulty: str) -> pd.DataFrame:
+        """
+        Core filtering logic.
+        - Implements the Set filters use case for both Search and recommendation flows.
+        - Statechart: this is part of the 'Searching' / 'Recommending' internal behavior.
+        """
         m = pd.Series(True, index=df.index)
         if title_kw:
             m &= df["_title_main"].str.contains(title_kw, case=False, na=False)
@@ -208,6 +298,11 @@ class BookData:
         return df.loc[m].copy()
 
     def search(self, title_kw: str, author_kw: str, language: str, genre: str, difficulty: str) -> pd.DataFrame:
+        """
+        Use-case: Search books.
+        Sequence diagram (User triggers Search): called at step 16 search(...),
+        after the user clicks the Search button in BookApp.on_search().
+        """
         df = self._apply_filters(self.df, title_kw, author_kw, language, genre, difficulty)
         out = df.loc[:, ["_title_main", "_authors", "_language", "_rating", "_difficulty"]].copy()
         out.rename(columns={"_title_main": "title", "_authors": "authors", "_language": "language",
@@ -217,7 +312,8 @@ class BookData:
     # ---- similarity helpers ----
     def _strict_desc_subset(self, base: pd.DataFrame, query: str) -> pd.DataFrame:
         """
-        Return subset of base whose _description contains ANY of the tokens in query.
+        Helper that narrows down candidates to rows whose description contains tokens
+        from the user's query. Used by recommendation methods to better match topics.
         """
         tokens = [t.strip() for t in re.split(r"[,\s]+", query) if t.strip()]
         if not tokens:
@@ -231,6 +327,13 @@ class BookData:
                               genre_filter: Optional[str] = None,
                               difficulty: Optional[str] = None,
                               title_kw: str = "", author_kw: str = "") -> pd.DataFrame:
+        """
+        Use-case: Personalize profile + Get recommendations.
+        - Takes user preferences for author/genre (from BookApp UI) and returns
+          a ranked list of books using cosine similarity.
+        - In the sequence diagram this is part of the 'Recommending' path
+          (similar to search(), but using TF-IDF instead of simple filters only).
+        """
         if not profile_query.strip():
             return pd.DataFrame()
         base = self._apply_filters(self.df, title_kw, author_kw,
@@ -255,6 +358,12 @@ class BookData:
                              genre_filter: Optional[str] = None,
                              difficulty: Optional[str] = None,
                              title_kw: str = "", author_kw: str = "") -> pd.DataFrame:
+        """
+        Use-case: Recommend by title.
+        - User provides a known book title; method returns similar books.
+        - In the use-case diagram this is a separate oval but internally reuses the
+          same RecommendationEngine (TF-IDF + cosine similarity).
+        """
         if not like_title.strip():
             return pd.DataFrame()
 
@@ -295,6 +404,11 @@ class BookData:
                              genre_filter: Optional[str] = None,
                              difficulty: Optional[str] = None,
                              title_kw: str = "", author_kw: str = "") -> pd.DataFrame:
+        """
+        Use-case: Recommend by keyword.
+        - Keyword/topic comes from the UI ('Keyword / topic' text field).
+        - This again uses TF-IDF similarity over filtered candidates.
+        """
         if not keyword_query.strip():
             return pd.DataFrame()
         base = self._apply_filters(self.df, title_kw, author_kw,
@@ -319,25 +433,55 @@ class BookData:
         )
 
 class BookApp(tk.Tk):
+    """
+    Main application / controller class.
+    - In the class diagram, BookApp composes BookData and uses AppState / ReadingListManager.
+    - Statechart diagram:
+        * Launching → Idle → Searching / Recommending / UpdatingLists.
+      The event handlers below (on_search, on_recommend, etc.) correspond to those transitions.
+    - Deployment diagram: BookApp is the «application» running inside the Python 3.x
+      runtime on a Windows PC.
+    - Use-case mapping:
+        * Search / filters / Clear results
+        * Personalize profile / Get recommendations / Recommend by title / keyword
+        * Manage To-Read / Completed lists
+        * Refresh dashboard / View progress chart
+        * Persist lists via AppState JSON.
+    """
     def __init__(self):
         super().__init__()
         self.title("Book Recommendation Platform")
         self.geometry("1180x760")
 
+        # Sequence diagram step 2: load_state()
         self.state = load_state()
+        # Composition: BookApp owns one BookData instance (class diagram).
         self.data = BookData()
 
+        # These lists implement the ReadingListManager responsibilities in the
+        # class diagram and support use cases:
+        # - Add selected to To-Read
+        # - Mark selected as completed
+        # - Remove from To-Read / Completed
         self.to_read: List[str] = self.state.get("to_read", [])
         self.completed: List[str] = self.state.get("completed", [])
 
         # One shared IntVar used by all spinboxes (kept in sync)
+        # This supports the “Max results to show” UI feature in several use cases.
         self.max_results_var = tk.IntVar(value=300)
 
+        # Build menus and layout (sequence diagram step 5 build_menu/build_layout).
         self._build_menu()
         self._build_layout()
+        # Auto-load dataset (sequence diagram: Auto-load dataset lifeline).
         self._auto_load_dataset()
 
     def _build_menu(self):
+        """
+        Menu bar with 'Load dataset' and 'Exit'.
+        - Implements the File → Load dataset use case from the non-functional requirements.
+        - Also appears as part of BookApp UI in the deployment and UI mockup.
+        """
         menubar = tk.Menu(self)
         filem = tk.Menu(menubar, tearoff=0)
         filem.add_command(label="Load dataset (CSV/XLSX)...", command=self.on_load_dataset)
@@ -347,12 +491,21 @@ class BookApp(tk.Tk):
         self.config(menu=menubar)
 
     def _build_layout(self):
+        """
+        Builds the UI layout exactly as shown in the draft user interface:
+        - Left: scrollable panel with filters and recommendation controls
+        - Right: notebook with Results, To-Read, Completed, Dashboard tabs
+        This layout directly realizes the use-case diagram interactions:
+        Search books, Set/Clear filters, Personalize profile, Get recommendations,
+        Recommend by title/keyword, manage lists, and view dashboard.
+        """
         # Left: scrollable sidebar
         left_wrap = ScrollableFrame(self)
         left_wrap.pack(side=tk.LEFT, fill=tk.Y, padx=6, pady=6)
         left = left_wrap.inner
 
         # --- Search / Filters ---
+        # Use-case: Search books / Set filters.
         ttk.Label(left, text="Search / Filters", font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(0,6))
         self.title_var = tk.StringVar()
         self.author_var = tk.StringVar()
@@ -383,12 +536,15 @@ class BookApp(tk.Tk):
         ttk.Label(left, text="Max results to show:").pack(anchor="w", pady=(10,0))
         ttk.Spinbox(left, from_=10, to=2000, increment=10, textvariable=self.max_results_var, width=8).pack(anchor="w", pady=2)
 
+        # Statechart: clicking Search moves Idle → Searching.
         ttk.Button(left, text="Search", command=self.on_search).pack(anchor="w", pady=(10,4))
+        # Use-case: Clear filters / Clear results.
         ttk.Button(left, text="Clear Filters", command=self.on_clear_filters).pack(anchor="w")
 
         ttk.Separator(left, orient="horizontal").pack(fill="x", pady=12)
 
         # --- Personalize ---
+        # Use-case: Personalize profile (author/genre preferences) and Get recommendations.
         ttk.Label(left, text="Personalize", font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(0,6))
         self.pref_author = tk.StringVar()
         self.pref_genre = tk.StringVar()
@@ -404,6 +560,7 @@ class BookApp(tk.Tk):
         ttk.Button(left, text="Get Recommendations", command=self.on_recommend).pack(anchor="w", pady=8)
 
         # --- Recommend by Title ---
+        # Use-case: Recommend by title.
         ttk.Label(left, text="I like this title:").pack(anchor="w", pady=(12,0))
         self.like_title_var = tk.StringVar()
         ttk.Entry(left, textvariable=self.like_title_var, width=28).pack(anchor="w", pady=2)
@@ -415,6 +572,7 @@ class BookApp(tk.Tk):
         ttk.Button(left, text="Recommend by Title", command=self.on_recommend_by_title).pack(anchor="w", pady=4)
 
         # --- Recommend by Keyword ---
+        # Use-case: Recommend by keyword.
         ttk.Label(left, text="Keyword / topic:").pack(anchor="w", pady=(12,0))
         self.keyword_var = tk.StringVar()
         ttk.Entry(left, textvariable=self.keyword_var, width=28).pack(anchor="w", pady=2)
@@ -427,6 +585,9 @@ class BookApp(tk.Tk):
 
         ttk.Separator(left, orient="horizontal").pack(fill="x", pady=12)
 
+        # List management buttons implement:
+        # - Add selected to To-Read
+        # - Mark selected as completed
         ttk.Button(left, text="Add selected to To-Read", command=self.add_selected_to_read).pack(anchor="w", pady=4)
         ttk.Button(left, text="Mark selected as Completed", command=self.add_selected_completed).pack(anchor="w", pady=2)
 
@@ -450,6 +611,12 @@ class BookApp(tk.Tk):
         self._build_dashboard_tab()
 
     def _build_results_tab(self, parent):
+        """
+        Builds the main results grid.
+        - Use-case: Search books / Get recommendations.
+        - Users can 'Select row in results' here before adding to lists, as shown in
+          the use-case diagram.
+        """
         container = ttk.Frame(parent)
         container.pack(fill=tk.BOTH, expand=True)
 
@@ -474,14 +641,21 @@ class BookApp(tk.Tk):
 
         bottom = ttk.Frame(parent)
         bottom.pack(fill="x", pady=6)
+        # Use-case: Clear results.
         ttk.Button(bottom, text="Clear Results", command=self.clear_results).pack(side=tk.LEFT)
         ttk.Label(parent, text="Tip: Click a row, then use the buttons on the left to add to lists.").pack(anchor="w", pady=4)
 
     def clear_results(self):
+        """Implements the 'Clear results' use case from the use-case diagram."""
         for tr in self.tree.get_children():
             self.tree.delete(tr)
 
     def _build_to_read_tab(self):
+        """
+        Tab backing the 'To-Read' list.
+        - Corresponds to ReadingListManager.to_read in the class diagram and the
+          ReadingListItem entity in the ER diagram (status = To-Read).
+        """
         self.tree_tr = ttk.Treeview(self.tab_toread, columns=("title","authors"), show="headings")
         for c in ("title","authors"):
             self.tree_tr.heading(c, text=c.title())
@@ -489,9 +663,14 @@ class BookApp(tk.Tk):
         self.tree_tr.pack(fill=tk.BOTH, expand=True)
         btns = ttk.Frame(self.tab_toread)
         btns.pack(fill="x", pady=6)
+        # Use-case: Remove from To-Read.
         ttk.Button(btns, text="Remove from To-Read", command=self.remove_from_to_read).pack(side=tk.LEFT, padx=4)
 
     def _build_completed_tab(self):
+        """
+        Tab backing the 'Completed' list.
+        - Corresponds to ReadingListItem with status = Completed in the ER diagram.
+        """
         self.tree_c = ttk.Treeview(self.tab_completed, columns=("title","authors"), show="headings")
         for c in ("title","authors"):
             self.tree_c.heading(c, text=c.title())
@@ -499,9 +678,15 @@ class BookApp(tk.Tk):
         self.tree_c.pack(fill=tk.BOTH, expand=True)
         btns = ttk.Frame(self.tab_completed)
         btns.pack(fill="x", pady=6)
+        # Use-case: Remove from completed.
         ttk.Button(btns, text="Remove from Completed", command=self.remove_from_completed).pack(side=tk.LEFT, padx=4)
 
     def _build_dashboard_tab(self):
+        """
+        Dashboard tab that shows the reading progress bar chart.
+        - Use-case: Refresh dashboard / View progress chart (included use case).
+        - Class diagram: uses matplotlib.figure.Figure / FigureCanvasTkAgg external types.
+        """
         self.fig = Figure(figsize=(5,3), dpi=100)
         self.ax1 = self.fig.add_subplot(111)
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.tab_dashboard)
@@ -510,6 +695,12 @@ class BookApp(tk.Tk):
 
     # ---------- Dataset loading ----------
     def _auto_load_dataset(self):
+        """
+        Implements the 'Auto-load dataset' fragment from the sequence diagram.
+        - Checks for books_enriched.csv at startup.
+        - If present, calls BookData.load_file() and BookData.set_column_map().
+        - When done, it transitions the statechart from Launching → Idle.
+        """
         if not os.path.exists(DATASET_PATH):
             messagebox.showwarning("Dataset not found",
                                    f"Could not find dataset at:\n{DATASET_PATH}\n\nUse File → Load dataset to pick your CSV/XLSX.")
@@ -540,6 +731,11 @@ class BookApp(tk.Tk):
                             f"Loaded and indexed:\n{DATASET_PATH}\n\nYou can now Search or Get Recommendations.")
 
     def on_load_dataset(self):
+        """
+        Handler for File → Load dataset menu command.
+        - Supports the non-functional requirement of allowing users to swap datasets.
+        - Follows the same mapping / indexing sequence as _auto_load_dataset().
+        """
         path = filedialog.askopenfilename(
             title="Select books dataset (CSV or Excel)",
             filetypes=[("CSV","*.csv"),("Excel","*.xlsx *.xls"),("All files","*.*")]
@@ -564,6 +760,8 @@ class BookApp(tk.Tk):
         try:
             self.data.set_column_map(mapping)
         except Exception:
+            # If automatic mapping fails, we invoke the mapping dialog (ask_column_map),
+            # corresponding to the manual mapping flow in the analysis models.
             self.ask_column_map(df)
             return
 
@@ -571,15 +769,25 @@ class BookApp(tk.Tk):
         messagebox.showinfo("Dataset ready", "Dataset loaded and indexed. You can now search or get recommendations.")
 
     def _populate_filters(self):
+        """
+        Uses BookData.get_languages() and get_genres() to populate filter options.
+        - Directly supports the 'Set filters' use case from the use-case diagram.
+        """
         langs = ["Any"] + self.data.get_languages()
         self.lang_cb.configure(values=langs)
         self.lang_var.set("Any")
 
-        genres = ["Any"] + (self.data.get_genres() or [])
+        genres = ["Any"] + (self.data.get_genres() or []
+                            )
         self.genre_cb.configure(values=genres if genres else ["Any"])
         self.genre_var.set("Any")
 
     def ask_column_map(self, df: pd.DataFrame):
+        """
+        Shows a dialog that lets the user map columns manually.
+        - This UI corresponds to a refinement of the BookData.set_column_map() behavior
+          when automatic guessing is insufficient.
+        """
         top = tk.Toplevel(self)
         top.title("Map Columns")
         top.grab_set()
@@ -622,6 +830,12 @@ class BookApp(tk.Tk):
         ttk.Button(btns, text="Cancel", command=top.destroy).pack(side=tk.LEFT, padx=5)
 
     def _confirm_map(self, dialog: tk.Toplevel, mapping_vars: Dict[str, tk.StringVar]):
+        """
+        Callback for the mapping dialog.
+        - Builds a mapping dict and passes it to BookData.set_column_map().
+        - Once successful, filters are populated, completing the dataset-loading
+          workflow from the sequence diagram.
+        """
         mapping = {k:(v.get() if v.get()!="(none)" else None) for k,v in mapping_vars.items()}
         try:
             self.data.set_column_map(mapping)
@@ -635,6 +849,13 @@ class BookApp(tk.Tk):
 
     # ---------- Actions ----------
     def on_search(self):
+        """
+        Event handler for the Search button.
+        - Use-case: Search books.
+        - Statechart: Idle → Searching → Idle.
+        - Sequence diagram: corresponds to step 14 Click "Search", step 15 on_search(...),
+          step 16 BookData.search(...), step 18 DataFrame results, and step 19 _fill_tree().
+        """
         if self.data.df is None:
             messagebox.showwarning("No dataset", "Load a dataset first (File → Load dataset).")
             return
@@ -649,6 +870,10 @@ class BookApp(tk.Tk):
         self._fill_tree(df)
 
     def on_clear_filters(self):
+        """
+        Implements the Clear filters use case:
+        resets all filter fields and clears any results currently in the grid.
+        """
         self.title_var.set("")
         self.author_var.set("")
         self.lang_var.set("Any")
@@ -657,6 +882,11 @@ class BookApp(tk.Tk):
         self.clear_results()
 
     def on_recommend(self):
+        """
+        Event handler for 'Get Recommendations'.
+        - Use-cases: Personalize profile + Get recommendations.
+        - Statechart: Idle → Recommending → Idle.
+        """
         if self.data.df is None:
             messagebox.showwarning("No dataset", "Load a dataset first (File → Load dataset).")
             return
@@ -679,6 +909,10 @@ class BookApp(tk.Tk):
         self._fill_tree(recs)
 
     def on_recommend_by_title(self):
+        """
+        Event handler for 'Recommend by Title'.
+        - Use-case: Recommend by title.
+        """
         if self.data.df is None:
             messagebox.showwarning("No dataset", "Load a dataset first (File → Load dataset).")
             return
@@ -701,6 +935,10 @@ class BookApp(tk.Tk):
         self._fill_tree(recs)
 
     def on_recommend_by_keyword(self):
+        """
+        Event handler for 'Recommend by Keyword'.
+        - Use-case: Recommend by keyword.
+        """
         if self.data.df is None:
             messagebox.showwarning("No dataset", "Load a dataset first (File → Load dataset).")
             return
@@ -723,6 +961,12 @@ class BookApp(tk.Tk):
         self._fill_tree(recs)
 
     def _fill_tree(self, df: pd.DataFrame):
+        """
+        Internal helper to show DataFrame results in the results treeview.
+        - Used by all searching / recommendation flows.
+        - After loading results, it refreshes reading lists and dashboard to keep
+          the UI consistent with the statechart (searching/recommending returns to Idle).
+        """
         self.clear_results()
         if df is None or df.empty:
             return
@@ -741,6 +985,11 @@ class BookApp(tk.Tk):
         self.refresh_dashboard()
 
     def get_selected_titles_from_results(self) -> List[str]:
+        """
+        Helper to read the titles of currently selected rows in the Results tree.
+        - Use-case diagram: supports 'Select row in results' (precondition for
+          adding to To-Read or marking Completed).
+        """
         sel = []
         for item in self.tree.selection():
             vals = self.tree.item(item, "values")
@@ -749,6 +998,11 @@ class BookApp(tk.Tk):
         return sel
 
     def add_selected_to_read(self):
+        """
+        Implements 'Add selected to To-Read' use case.
+        - Also triggers the Persist lists include-relationship by calling persist_lists().
+        - Statechart: Idle → UpdatingLists → Idle.
+        """
         titles = self.get_selected_titles_from_results()
         if not titles:
             return
@@ -759,6 +1013,10 @@ class BookApp(tk.Tk):
         self.refresh_lists()
 
     def add_selected_completed(self):
+        """
+        Implements 'Mark selected as completed' use case.
+        - Moves items from To-Read to Completed where appropriate.
+        """
         titles = self.get_selected_titles_from_results()
         if not titles:
             return
@@ -771,6 +1029,9 @@ class BookApp(tk.Tk):
         self.refresh_lists()
 
     def remove_from_to_read(self):
+        """
+        Implements 'Remove from To-Read' use case.
+        """
         items = self.tree_tr.selection()
         for it in items:
             vals = self.tree_tr.item(it, "values")
@@ -780,6 +1041,9 @@ class BookApp(tk.Tk):
         self.refresh_lists()
 
     def remove_from_completed(self):
+        """
+        Implements 'Remove from completed' use case.
+        """
         items = self.tree_c.selection()
         for it in items:
             vals = self.tree_c.item(it, "values")
@@ -789,11 +1053,21 @@ class BookApp(tk.Tk):
         self.refresh_lists()
 
     def persist_lists(self):
+        """
+        Persists To-Read and Completed lists via AppState JSON.
+        - Use-case diagram: corresponds to the 'Persist lists' included use case
+          used by all list-modifying operations.
+        - Class diagram: uses AppState.save_state().
+        """
         self.state["to_read"] = self.to_read
         self.state["completed"] = self.completed
         save_state(self.state)
 
     def refresh_lists(self):
+        """
+        Refreshes the To-Read and Completed tab views to reflect current state.
+        - This is part of the 'UpdatingLists' state in the statechart.
+        """
         for tr in self.tree_tr.get_children():
             self.tree_tr.delete(tr)
         for t in self.to_read:
@@ -815,6 +1089,13 @@ class BookApp(tk.Tk):
             self.tree_c.insert("", tk.END, values=(t, a))
 
     def refresh_dashboard(self):
+        """
+        Rebuilds the dashboard bar chart.
+        - Implements the 'Refresh dashboard' use case.
+        - Use-case diagram: this supports 'View progress chart'.
+        - Sequence diagram: corresponds to the 'Dashboard refresh' fragment
+          (steps 20–23).
+        """
         self.ax1.clear()
         total = len(self.to_read) + len(self.completed)
         values = [len(self.to_read), len(self.completed)]
@@ -828,6 +1109,10 @@ class BookApp(tk.Tk):
         self.canvas.draw()
 
 if __name__ == "__main__":
+    # Entry point of the application.
+    # Sequence diagram: 'start app' (step 1) creates the BookApp object,
+    # which in turn creates BookData and loads AppState.
+    # Object diagram: this corresponds to the bookapp:BookApp instance
+    # owning data:BookData, state:dict, and having references to widgets.
     app = BookApp()
     app.mainloop()
-
