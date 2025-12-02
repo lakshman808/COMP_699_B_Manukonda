@@ -1,19 +1,4 @@
-# Book Recommendation Platform – Final Code with UML / Requirements Walk-through Comments
-#
-# High-level mapping:
-# - This module implements the “Book Recommendation Platform” system in the UML diagrams.
-# - BookApp (controller + main window) corresponds to the BookApp class in the class diagram
-#   and to the main process in the deployment diagram.
-# - BookData is the data / recommendation model and corresponds to the BookData and
-#   RecommendationEngine classes in the class diagram and to the Book entity in the ER diagram.
-# - The load_state / save_state helpers play the role of the AppState / ReadingListManager
-#   utilities in the class diagram and deployment diagram.
-# - UI widgets and layout implement the use cases from the use-case diagram:
-#   * Search books, Set/Clear filters, Clear results
-#   * Personalize profile / Get recommendations
-#   * Recommend by title / keyword
-#   * Add/Remove/Complete items in To-Read and Completed lists
-#   * Refresh dashboard / View progress chart / Persist lists
+# Book Recommendation Platform
 
 import json
 import os
