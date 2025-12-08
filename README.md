@@ -75,3 +75,23 @@ You can install dependencies with:
 
 ```bash
 pip install pandas scikit-learn matplotlib
+
+
+
+## How to Run the Book Recommendation Platform
+
+Follow these steps to run the application:
+
+1. **Open a terminal / command prompt**
+
+2. **Change into the project folder**
+
+   ```bash
+   cd <your-project-folder>
+3. Run the application
+
+ ```bash
+   python main.py
+
+
+
