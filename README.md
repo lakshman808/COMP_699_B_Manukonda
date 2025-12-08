@@ -86,11 +86,9 @@ Follow these steps to run the application:
 
 2. **Change into the project folder**
 
-   ```bash
    cd <your-project-folder>
 3. Run the application
 
- ```bash
    python main.py
 
 
